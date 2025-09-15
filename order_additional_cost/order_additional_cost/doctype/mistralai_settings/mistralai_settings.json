@@ -1,0 +1,50 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-09-03 17:54:39.283291",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "api_key_status",
+  "system_prompt"
+ ],
+ "fields": [
+  {
+   "fieldname": "api_key_status",
+   "fieldtype": "Data",
+   "label": "API Key Status",
+   "read_only": 1
+  },
+  {
+   "description": "Define the system prompt for the AI. This instructs the model on how to behave and what JSON format to return. Be careful when editing.",
+   "fieldname": "system_prompt",
+   "fieldtype": "Code",
+   "label": "System AI Prompt"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2025-09-12 05:45:18.346333",
+ "modified_by": "Administrator",
+ "module": "Order Additional Cost",
+ "name": "MistralAI Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
