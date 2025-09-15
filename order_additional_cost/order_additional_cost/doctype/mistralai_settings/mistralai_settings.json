@@ -6,6 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "api_key_status",
+  "default_item",
   "system_prompt"
  ],
  "fields": [
@@ -20,13 +21,20 @@
    "fieldname": "system_prompt",
    "fieldtype": "Code",
    "label": "System AI Prompt"
+  },
+  {
+   "description": "Select the default Item Code to be used when the AI cannot confidently match a cost description to an existing item",
+   "fieldname": "default_item",
+   "fieldtype": "Link",
+   "label": "Default Item",
+   "options": "Item"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-09-12 05:45:18.346333",
+ "modified": "2025-09-15 12:24:15.230302",
  "modified_by": "Administrator",
  "module": "Order Additional Cost",
  "name": "MistralAI Settings",

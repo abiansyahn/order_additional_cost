@@ -4,7 +4,24 @@ import os
 from mistralai import Mistral, SystemMessage, UserMessage
 from thefuzz import process
 
-frappe.utils.logger.set_log_level("DEBUG")
+@frappe.whitelist()
+def check_settings():
+    """
+    Checks if all required settings for the AI feature are configured.
+    Returns a list of missing settings.
+    """
+    missing_settings = []
+    
+    # Check for the API key in site_config.json
+    if not frappe.conf.get("mistral_api_key"):
+        missing_settings.append("Mistral API Key has not been set by the administrator.")
+        
+    # Check for the fallback item in the Settings Doctype
+    if not frappe.db.get_single_value("MistralAI Settings", "default_item"):
+        missing_settings.append("A 'Default Fallback Item' has not been selected in MistralAI Settings.")
+        
+    return missing_settings
+
 @frappe.whitelist()
 def process_invoice_pdf(file_url):
     """
@@ -44,6 +61,10 @@ def process_invoice_pdf(file_url):
 
         cost_with_items = []
         if extracted_data.get("costs"):
+            fallback_item = frappe.db.get_single_value("MistralAI Settings", "default_item")
+            if not fallback_item:
+                frappe.throw("Please set a default item in MistralAI Settings to use when no match is found.")
+
             item_choices = [d.item_name for d in frappe.get_all("Item", {"disabled": 0, "is_stock_item": 0}, "item_name")]
 
             for cost in extracted_data["costs"]:
@@ -54,7 +75,7 @@ def process_invoice_pdf(file_url):
                 if best_item_match:
                     matched_item_code = frappe.get_value("Item", {"item_name": best_item_match}, "item_code")
                 else:
-                    matched_item_code = "Other Cost"
+                    matched_item_code = fallback_item
                 new_cost["item_code"] = matched_item_code
                 cost_with_items.append(new_cost)
         

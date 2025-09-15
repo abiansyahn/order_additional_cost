@@ -2,7 +2,21 @@ frappe.ui.form.on('Purchase Order', {
     refresh: function(frm) {
         if (!frm.is_new()) {
             frm.add_custom_button(__('Add Customs & Transport Costs'), function() {
-                show_costs_dialog(frm);
+                frappe.call({
+                    method: 'order_additional_cost.api.check_settings',
+                    callback: function(r) {
+                        if (r.message && r.message.length > 0) {
+                            let error_html = r.message.join('<br>');
+                            frappe.msgprint({
+                                title: __('Configuration Missing'),
+                                indicator: 'red',
+                                message: __('Please ask your system administrator to configure the following before proceeding:<br><br>' + error_html)
+                            });
+                        } else {
+                            show_costs_dialog(frm);
+                        }
+                    }
+                });
             });
         }
     }
