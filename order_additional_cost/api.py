@@ -65,18 +65,20 @@ def process_invoice_pdf(file_url):
             if not fallback_item:
                 frappe.throw("Please set a default item in MistralAI Settings to use when no match is found.")
 
-            item_choices = [d.item_name for d in frappe.get_all("Item", {"disabled": 0, "is_stock_item": 0}, "item_name")]
+            item_choices = [d.item_name for d in frappe.get_all("Item", {"disabled": 0, "is_stock_item": 0}, "description")]
 
             for cost in extracted_data["costs"]:
                 best_item_match = find_best_match(cost.get("description"), item_choices, use_list=True, score_cutoff=80)
 
-                frappe.logger("api").info(f"Cost description: {cost.get('description')}, Best item match: {best_item_match}")
                 new_cost = cost.copy()
                 if best_item_match:
-                    matched_item_code = frappe.get_value("Item", {"item_name": best_item_match}, "item_code")
+                    matched_item_code = frappe.get_value("Item", {"description": best_item_match}, "item_code")
+                    description = best_item_match
                 else:
                     matched_item_code = fallback_item
+                    description = frappe.get_value("Item", fallback_item, "description") or "Other Cost"
                 new_cost["item_code"] = matched_item_code
+                new_cost["item_description"] = description
                 cost_with_items.append(new_cost)
         
         return {
@@ -128,21 +130,21 @@ def get_raw_text_from_mistral(document_url):
     You are an expert data extraction assistant. You will be given a URL to a document.
     Your task is to read the document and extract the logistics company's name (e.g., FedEx, DHL) and
     all cost-related line items, such as transport fees, customs duties, handling fees, etc.
-    Analyze the description of each cost. If it is a government levy, duty, or tax, set the category to 'Tax'. Otherwise, set it to 'Logistics'.
+    Analyze the description of each cost. If it is a government levy, duty, or tax, set the category to 'Tariff'. Otherwise, set it to 'Logistics'.
     Provide the output as a single, valid JSON object containing a single key "costs" which is a list of objects.
 
     Each object in the "costs" list must contain these keys:
     - "description": A string describing the cost (e.g., "Transport", "Customs Duty").
     - "amount": A number representing the cost amount.
     - "hs_code": A string for the HS/Tariff code if available, otherwise an empty string "".
-    - "category": A string categorizing the cost ("Tax" or "Logistics").
+    - "category": A string categorizing the cost ("Tariff" or "Logistics").
 
     Example:
     {
       "supplier_name": "FedEx Express",
       "costs": [
         { "description": "International Priority Freight", "amount": 150.75, "hs_code": "85171200", "category": "Logistics" },
-        { "description": "Customs Duty", "amount": 75.00, "hs_code": "87032100", "category": "Tax" },
+        { "description": "Customs Duty", "amount": 75.00, "hs_code": "87032100", "category": "Tariff" },
         { "description": "Customs Handling Fee", "amount": 45.50, "hs_code": "" }
       ]
     }
@@ -221,10 +223,10 @@ def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier
     invoice_items = []
     for cost in costs_data:
         invoice_items.append({
-            "item_code": cost.get("item_code") or "Other Cost",
+            "item_code": cost.get("item_code") or frappe.db.get_single_value("MistralAI Settings", "default_item"),
             "qty": 1,
             "rate": cost.amount,
-            "description": cost.description[:140],
+            "description": cost.item_description,
         })
 
     pi = frappe.get_doc({

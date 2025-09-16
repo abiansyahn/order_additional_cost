@@ -72,7 +72,7 @@ function show_costs_dialog(frm) {
                         fieldname: 'category',
                         label: __('Category'),
                         fieldtype: 'Select',
-                        options: ['Tax', 'Logistics'].join('\n'),
+                        options: ['Tariff', 'Logistics'].join('\n'),
                         in_list_view: 1,
                         reqd: 1
                     },
@@ -83,13 +83,20 @@ function show_costs_dialog(frm) {
                         options: 'Item',
                         in_list_view: 1,
                         reqd: 1,
-                        get_query: () => { // Filter for service items
+                        get_query: () => {
                             return { filters: { 'is_stock_item': 0 } };
                         }
                     },
                     {
+                        fieldname: 'item_description',
+                        label: __('Item Description'),
+                        fieldtype: 'Data',
+                        in_list_view: 1,
+                        reqd: 1
+                    },
+                    {
                         fieldname: 'description',
-                        label: __('Description'),
+                        label: __('PDF Item Description'),
                         fieldtype: 'Data',
                         in_list_view: 1,
                         reqd: 1
@@ -141,32 +148,9 @@ function show_costs_dialog(frm) {
             });
             d.hide();
         },
-        // on_page_show() {
-        //     // Force public upload logic
-        //     const attach_btn = d.wrapper.querySelector('[data-fieldname="invoice_pdf"] .btn-attach');
-        //     attach_btn.addEventListener('click', () => {
-        //         const observer = new MutationObserver((mutationsList, obs) => {
-        //             for(const mutation of mutationsList) {
-        //                 if (mutation.type === 'childList') {
-        //                     for (const node of mutation.addedNodes) {
-        //                         if (node.nodeType === 1 && node.matches('.file-uploader')) {
-        //                             const private_field = node.querySelector('[data-fieldname="is_private"]');
-        //                             if(private_field) {
-        //                                 private_field.style.display = 'none';
-        //                                 const checkbox = private_field.querySelector('input[type="checkbox"]');
-        //                                 if (checkbox) checkbox.checked = false;
-        //                             }
-        //                             obs.disconnect();
-        //                             return;
-        //                         }
-        //                     }
-        //                 }
-        //             }
-        //         });
-        //         observer.observe(document.body, { childList: true, subtree: true });
-        //     });
-        // }
     });
+
+    $(d.parent).closest(".modal-dialog").css({width: '1200px', maxWidth: '100%'});
 
     d.fields_dict.invoice_pdf.df.onchange = () => {
         let file_url = d.get_values().invoice_pdf;
