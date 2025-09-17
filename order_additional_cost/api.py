@@ -65,18 +65,28 @@ def process_invoice_pdf(file_url):
             if not fallback_item:
                 frappe.throw("Please set a default item in MistralAI Settings to use when no match is found.")
 
-            item_choices = [d.item_name for d in frappe.get_all("Item", {"disabled": 0, "is_stock_item": 0}, "description")]
+            all_items = frappe.get_all("Item", {"disabled": 0, "is_stock_item": 0}, ["name", "item_name", "description"])
 
+            search_choices = {}
+            for item in all_items:
+                search_texts = item.item_name
+                if item.description:
+                    search_texts += f" | {item.description}"
+                search_choices[search_texts] = item.name
+            
             for cost in extracted_data["costs"]:
-                best_item_match = find_best_match(cost.get("description"), item_choices, use_list=True, score_cutoff=80)
-
                 new_cost = cost.copy()
-                if best_item_match:
-                    matched_item_code = frappe.get_value("Item", {"description": best_item_match}, "item_code")
-                    description = best_item_match
-                else:
-                    matched_item_code = fallback_item
-                    description = frappe.get_value("Item", fallback_item, "description") or "Other Cost"
+                matched_item_code = fallback_item
+                description = frappe.get_value("Item", fallback_item, "description") or "Other Cost"
+
+                if search_choices:
+                    best_match_tuple = process.extractOne(cost.get("description"), search_choices.keys(), score_cutoff=80)
+
+                    if best_match_tuple:
+                        matched_search_text = best_match_tuple[0]
+                        matched_item_code = search_choices[matched_search_text]
+                        description = frappe.get_value("Item", matched_item_code, "description") or description
+
                 new_cost["item_code"] = matched_item_code
                 new_cost["item_description"] = description
                 cost_with_items.append(new_cost)
