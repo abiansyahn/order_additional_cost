@@ -72,7 +72,7 @@ function show_costs_dialog(frm) {
                         fieldname: 'category',
                         label: __('Category'),
                         fieldtype: 'Select',
-                        options: ['Tariff', 'Logistics'].join('\n'),
+                        options: ['Tariff', 'Logistics', 'Tax'].join('\n'),
                         in_list_view: 1,
                         reqd: 1
                     },

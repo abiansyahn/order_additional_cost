@@ -140,14 +140,20 @@ def get_raw_text_from_mistral(document_url):
     You are an expert data extraction assistant. You will be given a URL to a document.
     Your task is to read the document and extract the logistics company's name (e.g., FedEx, DHL) and
     all cost-related line items, such as transport fees, customs duties, handling fees, etc.
-    Analyze the description of each cost. If it is a government levy, duty, or tax, set the category to 'Tariff'. Otherwise, set it to 'Logistics'.
+    Analyze the description of each cost.
+    
+    Use these rules for categorization:
+    - 'Tariff': Use for customs duties specifically related to importing goods.
+    - 'Tax': Use for other government levies like VAT, GST, or sales tax.
+    - 'Logistics': Use for all other costs related to transport, freight, handling, insurance, etc.
+
     Provide the output as a single, valid JSON object containing a single key "costs" which is a list of objects.
 
     Each object in the "costs" list must contain these keys:
     - "description": A string describing the cost (e.g., "Transport", "Customs Duty").
     - "amount": A number representing the cost amount.
     - "hs_code": A string for the HS/Tariff code if available, otherwise an empty string "".
-    - "category": A string categorizing the cost ("Tariff" or "Logistics").
+    - "category": A string classifying the cost into one of three types: 'Tariff', 'Tax', or 'Logistics'.
 
     Example:
     {
