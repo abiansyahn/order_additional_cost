@@ -1,0 +1,70 @@
+[
+ {
+  "add_total_row": 0,
+  "add_translate_data": 0,
+  "columns": [],
+  "disabled": 0,
+  "docstatus": 0,
+  "doctype": "Report",
+  "filters": [],
+  "is_standard": "No",
+  "javascript": null,
+  "json": null,
+  "letter_head": "Standard",
+  "modified": "2025-10-13 10:54:10.012041",
+  "module": "Order Additional Cost",
+  "name": "Landed Cost Report",
+  "prepared_report": 0,
+  "query": null,
+  "ref_doctype": "Purchase Order",
+  "reference_report": null,
+  "report_name": "Landed Cost Report",
+  "report_script": null,
+  "report_type": "Script Report",
+  "roles": [
+   {
+    "parent": "Landed Cost Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "Stock User"
+   },
+   {
+    "parent": "Landed Cost Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "Purchase User"
+   },
+   {
+    "parent": "Landed Cost Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "Purchase Manager"
+   },
+   {
+    "parent": "Landed Cost Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "Work Preperation User"
+   },
+   {
+    "parent": "Landed Cost Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "Logistics User"
+   },
+   {
+    "parent": "Landed Cost Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "Purchase Manager -  authorized representative"
+   },
+   {
+    "parent": "Landed Cost Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "Logistics Employee"
+   }
+  ],
+  "timeout": 0
+ }
+]

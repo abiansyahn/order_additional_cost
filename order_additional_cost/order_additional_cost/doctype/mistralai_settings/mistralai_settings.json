@@ -7,6 +7,10 @@
  "field_order": [
   "api_key_status",
   "default_item",
+  "standard_service_vat_template",
+  "account_head_for_tariff",
+  "account_head_for_tax",
+  "account_head_for_logistic",
   "system_prompt"
  ],
  "fields": [
@@ -28,13 +32,40 @@
    "fieldtype": "Link",
    "label": "Default Item",
    "options": "Item"
+  },
+  {
+   "description": "Default Account Head for Account Head field in auto-generated Purchase Invoice Item",
+   "fieldname": "account_head_for_tariff",
+   "fieldtype": "Link",
+   "label": "Account Head for Tariff (Zoll)",
+   "options": "Account"
+  },
+  {
+   "description": "Default Account Head for Account Head field in auto-generated Purchase Invoice Item",
+   "fieldname": "account_head_for_tax",
+   "fieldtype": "Link",
+   "label": "Account Head for Tax (Einfuhrumsatzsteuer)",
+   "options": "Account"
+  },
+  {
+   "description": "Default Account Head for Account Head field in auto-generated Purchase Invoice Item",
+   "fieldname": "account_head_for_logistic",
+   "fieldtype": "Link",
+   "label": "Account Head for Logistic Cost (Aufwands\u00adpauschale / Fracht)",
+   "options": "Account"
+  },
+  {
+   "fieldname": "standard_service_vat_template",
+   "fieldtype": "Link",
+   "label": "Standard Service VAT Template",
+   "options": "Item Tax Template"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-09-15 12:24:15.230302",
+ "modified": "2025-10-13 10:08:30.625022",
  "modified_by": "Administrator",
  "module": "Order Additional Cost",
  "name": "MistralAI Settings",

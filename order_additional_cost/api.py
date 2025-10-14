@@ -3,6 +3,7 @@ import json
 import os
 from mistralai import Mistral, SystemMessage, UserMessage
 from thefuzz import process
+frappe.utils.logger.set_log_level("DEBUG")
 
 @frappe.whitelist()
 def check_settings():
@@ -65,6 +66,7 @@ def process_invoice_pdf(file_url):
             if not fallback_item:
                 frappe.throw("Please set a default item in MistralAI Settings to use when no match is found.")
 
+            keyword_mappings = {d.keyword.lower(): d.item_code for d in frappe.get_all("AI Cost Item Mapping", fields=["keyword", "item_code"])}
             all_items = frappe.get_all("Item", {"disabled": 0, "is_stock_item": 0}, ["name", "item_name", "description"])
 
             search_choices = {}
@@ -76,18 +78,23 @@ def process_invoice_pdf(file_url):
             
             for cost in extracted_data["costs"]:
                 new_cost = cost.copy()
-                matched_item_code = fallback_item
+                matched_item_code = None
                 description = frappe.get_value("Item", fallback_item, "description") or "Other Cost"
 
-                if search_choices:
-                    best_match_tuple = process.extractOne(cost.get("description"), search_choices.keys(), score_cutoff=80)
+                for keyword, item_code in keyword_mappings.items():
+                    if keyword in cost.get("description", "").lower():
+                        matched_item_code = item_code
+                        description = frappe.get_value("Item", item_code, "description") or description
+                        break
 
+                if not matched_item_code or matched_item_code == fallback_item and search_choices:
+                    best_match_tuple = process.extractOne(cost.get("description"), search_choices.keys(), score_cutoff=80)
                     if best_match_tuple:
                         matched_search_text = best_match_tuple[0]
                         matched_item_code = search_choices[matched_search_text]
                         description = frappe.get_value("Item", matched_item_code, "description") or description
 
-                new_cost["item_code"] = matched_item_code
+                new_cost["item_code"] = matched_item_code or fallback_item
                 new_cost["item_description"] = description
                 cost_with_items.append(new_cost)
         
@@ -141,14 +148,17 @@ def get_raw_text_from_mistral(document_url):
     Your task is to read the document and extract the logistics company's name (e.g., FedEx, DHL) and
     all cost-related line items, such as transport fees, customs duties, handling fees, etc.
     Analyze the description of each cost.
-    
+    Important Rules:
+    1. Ignore any lines that represent a subtotal or grand total (e.g., 'Gesamtsumme', 'Total', 'Summe'). Only extract individual cost line items.
+    2. Ignore any line item that is a standard VAT calculation (Umsatzsteuer/USt.) on another service fee listed in the same invoice. The system will calculate this automatically. Only extract the primary costs themselves.
+
     Use these rules for categorization:
     - 'Tariff': Use for customs duties specifically related to importing goods.
     - 'Tax': Use for other government levies like VAT, GST, or sales tax.
     - 'Logistics': Use for all other costs related to transport, freight, handling, insurance, etc.
 
     Provide the output as a single, valid JSON object containing a single key "costs" which is a list of objects.
-
+    The JSON must have a key "supplier_name" with a string value.
     Each object in the "costs" list must contain these keys:
     - "description": A string describing the cost (e.g., "Transport", "Customs Duty").
     - "amount": A number representing the cost amount.
@@ -157,12 +167,12 @@ def get_raw_text_from_mistral(document_url):
 
     Example:
     {
-      "supplier_name": "FedEx Express",
-      "costs": [
+    "supplier_name": "FedEx Express",
+    "costs": [
         { "description": "International Priority Freight", "amount": 150.75, "hs_code": "85171200", "category": "Logistics" },
         { "description": "Customs Duty", "amount": 75.00, "hs_code": "87032100", "category": "Tariff" },
         { "description": "Customs Handling Fee", "amount": 45.50, "hs_code": "" }
-      ]
+    ]
     }
     """
 
@@ -214,7 +224,7 @@ def save_costs_and_create_pi(po_name, costs_data, logistic_supplier):
             if cost_item.amount and float(cost_item.amount) > 0:
                 frappe.logger("api").info(f"Adding cost item: {cost_item}")
                 po_doc.append("custom_additional_shipping_cost", {
-                    "item_code": cost_item.get("item_code"),
+                    "item_code": cost_item.item_code,
                     "description": cost_item.description[:140],
                     "amount": cost_item.amount,
                     "hs_code_tariff_number": cost_item.hs_code,
@@ -224,8 +234,31 @@ def save_costs_and_create_pi(po_name, costs_data, logistic_supplier):
 
         po_doc.custom_total_shipping_cost_amount = total_shipping_cost
         po_doc.save(ignore_permissions=True)
+
+        try:
+            fallback_item = frappe.db.get_single_value("MistralAI Settings", "default_item")
+            
+            for item in costs_data:
+                item = frappe._dict(item)
+                
+                if item.description and item.item_code and item.item_code != fallback_item:
+                    keyword = item.description.split(" ")[0].lower()
+
+                    exists = frappe.db.exists("AI Cost Item Mapping", {"keyword": keyword})
+                    
+                    if not exists:
+                        new_mapping = frappe.get_doc({
+                            "doctype": "AI Cost Item Mapping",
+                            "keyword": keyword,
+                            "item_code": item.item_code
+                        })
+                        new_mapping.insert(ignore_permissions=True)
+                        frappe.db.commit()
+        except Exception as e:
+            frappe.logger("api").error(f"Failed to create keyword mapping: {e}")
         frappe.db.commit()
 
+        frappe.logger("api").info(f"Creating Purchase Invoice for PO {po_name} with total shipping cost {total_shipping_cost} from supplier {logistic_supplier}")
         pi_name = create_logistics_purchase_invoice(po_doc, total_shipping_cost, logistic_supplier, costs_data)
         return { "status": "success", "pi_name": pi_name }
     except Exception as e:
@@ -237,13 +270,43 @@ def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier
         return None
     
     invoice_items = []
+    invoice_taxes = []
+
+    cost_center = source_po.cost_center
+    service_vat_template =  frappe.db.get_single_value("MistralAI Settings", "standard_service_vat_template")
+    
     for cost in costs_data:
-        invoice_items.append({
-            "item_code": cost.get("item_code") or frappe.db.get_single_value("MistralAI Settings", "default_item"),
-            "qty": 1,
-            "rate": cost.amount,
-            "description": cost.item_description,
-        })
+        cost = frappe._dict(cost)
+        category = cost.get("category")
+
+        if category in ["Tariff", "Logistics"]:
+            item_dict = {
+                "item_code": cost.get("item_code"),
+                "description": cost.get("description"),
+                "qty": 1,
+                "rate": cost.get("amount"),
+                "cost_center": cost_center
+            }
+            account = None
+            if category == "Tariff":
+                account = frappe.db.get_single_value("MistralAI Settings", "account_head_for_tariff")
+                item_dict["expense_account"] = account
+            elif category == "Logistics":
+                account = frappe.db.get_single_value("MistralAI Settings", "account_head_for_logistic")
+                item_dict["expense_account"] = account
+                if service_vat_template:
+                    item_dict["items_tax_template"] = service_vat_template
+            invoice_items.append(item_dict)
+        elif category == "Tax":
+            tax_account = None
+            tax_account = frappe.db.get_single_value("MistralAI Settings", "account_head_for_tax")
+            invoice_taxes.append({
+                "charge_type": "Actual",
+                "account_head": tax_account,
+                "tax_amount": cost.get("amount"),
+                "description": cost.get("description"),
+                "cost_center": cost_center
+            })
 
     pi = frappe.get_doc({
         "doctype": "Purchase Invoice",
@@ -252,7 +315,51 @@ def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier
         "due_date": frappe.utils.add_days(frappe.utils.today(), 30),
         "custom_source_purchase_order": source_po.name,
         "items": invoice_items,
+        "taxes": invoice_taxes,
     })
     pi.insert(ignore_permissions=True)
     frappe.db.commit()
     return pi.name
+
+@frappe.whitelist()
+def learn_from_corrections(corrections):
+    """
+    Receives user corrections and creates new, high-quality keyword mappings.
+    A correction is a dict with {'description': ai_text, 'item_code': user_selected_item}
+    """
+    if not corrections:
+        return
+
+    try:
+        for correction in corrections:
+            correction = frappe._dict(correction)
+
+            if not (correction.description and correction.item_code):
+                continue
+            
+            item_doc = frappe.get_doc("Item", correction.item_code)
+            
+            item_text = (item_doc.name + " " + (item_doc.description or "")).lower()
+            item_words = set(item_text.split())
+            
+            ai_words = set(correction.description.lower().split())
+            
+            common_words = item_words.intersection(ai_words)
+            
+            for keyword in common_words:
+                if len(keyword) <= 2:
+                    continue
+
+                exists = frappe.db.exists("AI Cost Item Mapping", {"keyword": keyword, "item_code": correction.item_code})
+                
+                if not exists:
+                    new_mapping = frappe.get_doc({
+                        "doctype": "AI Cost Item Mapping",
+                        "keyword": keyword,
+                        "item_code": correction.item_code
+                    })
+                    new_mapping.insert(ignore_permissions=True)
+        
+        frappe.db.commit()
+    except Exception as e:
+        frappe.log_error(f"Failed to create self-learning item mapping: {e}", "AI Self-Learning Error")

@@ -34,6 +34,8 @@ frappe.ui.form.on('Purchase Order Shipping Cost', {
 })
 
 function show_costs_dialog(frm) {
+    let initial_ai_costs = [];
+    
     let d = new frappe.ui.Dialog({
         title: __('Upload Logistics Invoice & Verify Costs'),
         fields: [
@@ -46,7 +48,7 @@ function show_costs_dialog(frm) {
             },
             {
                 label: 'Logistics Supplier',
-                fieldname: 'logistics_supplier',
+                fieldname: 'logistic_supplier',
                 fieldtype: 'Link',
                 options: 'Supplier',
                 description: 'Supplier will be auto-matched. Please verify.',
@@ -106,7 +108,11 @@ function show_costs_dialog(frm) {
                         label: __('Amount'),
                         fieldtype: 'Currency',
                         in_list_view: 1,
-                        reqd: 1
+                        reqd: 1,
+                        onchange: () => {
+                            console.log('Amount changed, updating total display');
+                            update_total_display();
+                        }
                     },
                     {
                         fieldname: 'hs_code',
@@ -115,11 +121,15 @@ function show_costs_dialog(frm) {
                         in_list_view: 1
                     }
                 ]
+            },
+            {
+                fieldname: 'total_display',
+                fieldtype: 'HTML'
             }
         ],
         primary_action_label: __('Add Costs & Create Invoice'),
         primary_action(values) {
-            if (!values.logistics_supplier) {
+            if (!values.logistic_supplier) {
                 frappe.msgprint(__('Please select a logistics supplier.'));
                 return;
             }
@@ -128,6 +138,28 @@ function show_costs_dialog(frm) {
                 frappe.msgprint(__('There are no costs to add.'));
                 return;
             }
+
+            const corrections = [];
+            if (values.extracted_costs && initial_ai_costs.length > 0) {
+                values.extracted_costs.forEach(final_row => {
+                    const initial_row = initial_ai_costs.find(r => r.description === final_row.description);
+                    if (initial_row && initial_row.item_code !== final_row.item_code) {
+                        corrections.push({
+                            description: final_row.description,
+                            item_code: final_row.item_code
+                        });
+                    }
+                });
+            }
+            
+            if (corrections.length > 0) {
+                frappe.call({
+                    method: 'order_additional_cost.api.learn_from_corrections',
+                    args: { corrections: corrections }
+                });
+            }
+
+            console.log(values);
 
             frappe.call({
                 method: 'order_additional_cost.api.save_costs_and_create_pi',
@@ -138,6 +170,7 @@ function show_costs_dialog(frm) {
                 },
                 callback: function(r) {
                     if (r.message && r.message.pi_name) {
+                        console.log('Created Purchase Invoice:', r.message.pi_name);
                         frappe.show_alert({
                             message: __('Successfully added costs. Draft Purchase Invoice {0} created.', [r.message.pi_name]),
                             indicator: 'green'
@@ -148,7 +181,22 @@ function show_costs_dialog(frm) {
             });
             d.hide();
         },
+        on_page_show: function() {
+            d.$wrapper.on('click', '.grid-remove-rows', function() {
+                update_total_display();
+        });
+        }
     });
+
+    const update_total_display = () => {
+        const data = d.get_value('extracted_costs') || [];
+        let total = data.reduce((sum, item) => sum + flt(item.amount), 0);
+        
+        let total_html = `<div style="text-align: right; margin-top: 10px;">
+            <h4>Total: ${format_currency(total)}</h4>
+        </div>`;
+        d.get_field('total_display').$wrapper.html(total_html);
+    };
 
     $(d.parent).closest(".modal-dialog").css({width: '1200px', maxWidth: '100%'});
 
@@ -163,12 +211,15 @@ function show_costs_dialog(frm) {
                     frappe.hide_progress();
                     if (r.message) {
                         if (r.message.matched_supplier) {
-                        d.set_value('logistics_supplier', r.message.matched_supplier);
+                        d.set_value('logistic_supplier', r.message.matched_supplier);
                         }
                         if (r.message && r.message.costs) {
+                            initial_ai_costs = r.message.costs;
+
                             d.fields_dict.extracted_costs.df.data = r.message.costs;
                             d.fields_dict.extracted_costs.grid.refresh();
-                            frappe.show_alert({message: __('Please verify the extracted data below.'), indicator: 'blue'});
+
+                            update_total_display();
                         }
                         frappe.show_alert({message: __('Data has been extracted and matched. Please verify.'), indicator: 'blue'});
                     } else {

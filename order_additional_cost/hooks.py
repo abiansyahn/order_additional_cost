@@ -246,4 +246,6 @@ doctype_js = {
 
 fixtures = [
     {"dt": "Custom Field", "filters": [["module", "=", "Order Additional Cost"]]},
+    {"dt": "Property Setter", "filters": [["module", "=", "Order Additional Cost"]]},
+    {"dt": "Report", "filters": [["module", "=", "Order Additional Cost"]]},
 ]
