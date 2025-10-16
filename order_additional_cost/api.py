@@ -20,6 +20,18 @@ def check_settings():
     # Check for the fallback item in the Settings Doctype
     if not frappe.db.get_single_value("MistralAI Settings", "default_item"):
         missing_settings.append("A 'Default Fallback Item' has not been selected in MistralAI Settings.")
+
+    # Check for the VAT template
+    if not frappe.db.get_single_value("MistralAI Settings", "standard_service_vat_template"):
+        missing_settings.append("A 'Standard Service VAT Template' has not been selected in MistralAI Settings.")
+
+    # Check for account heads
+    if not frappe.db.get_single_value("MistralAI Settings", "account_head_for_logistic"):
+        missing_settings.append("Account Head for 'Logistics' costs has not been set in MistralAI Settings.")
+    if not frappe.db.get_single_value("MistralAI Settings", "account_head_for_tariff"):
+        missing_settings.append("Account Head for 'Tariff' costs has not been set in MistralAI Settings.")
+    if not frappe.db.get_single_value("MistralAI Settings", "account_head_for_tax"):
+        missing_settings.append("Account Head for 'Tax' costs has not been set in MistralAI Settings.")
         
     return missing_settings
 
