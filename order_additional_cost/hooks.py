@@ -132,7 +132,7 @@ doctype_js = {
 # Override standard doctype classes
 
 # override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
+	# "Purchase Order": "order_additional_cost.overrides.dashboard_overrides.get_purchase_order_links"
 # }
 
 # Document Events
@@ -184,7 +184,7 @@ doctype_js = {
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
 # override_doctype_dashboards = {
-# 	"Task": "order_additional_cost.task.get_dashboard_data"
+# 	"Purchase Order": "order_additional_cost.overrides.dashboard_overrides.get_dashboard_for_purchase_order"
 # }
 
 # exempt linked doctypes from being automatically cancelled

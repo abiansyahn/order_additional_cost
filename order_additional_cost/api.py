@@ -71,6 +71,8 @@ def process_invoice_pdf(file_url):
         extracted_data = get_raw_text_from_mistral(public_url)
 
         matched_supplier = find_best_match(extracted_data.get("supplier_name"), "Supplier", "supplier_name")
+        invoice_number = extracted_data.get("invoice_number", "")
+        invoice_date = extracted_data.get("invoice_date", "")
 
         cost_with_items = []
         if extracted_data.get("costs"):
@@ -112,6 +114,8 @@ def process_invoice_pdf(file_url):
         
         return {
             "matched_supplier": matched_supplier,
+            "invoice_number": invoice_number,
+            "invoice_date": invoice_date,
             "costs": cost_with_items
         }
 
@@ -163,28 +167,34 @@ def get_raw_text_from_mistral(document_url):
     Important Rules:
     1. Ignore any lines that represent a subtotal or grand total (e.g., 'Gesamtsumme', 'Total', 'Summe'). Only extract individual cost line items.
     2. Ignore any line item that is a standard VAT calculation (Umsatzsteuer/USt.) on another service fee listed in the same invoice. The system will calculate this automatically. Only extract the primary costs themselves.
-
+    3. Extract the Invoice Date in YYYY-MM-DD format.
+    
     Use these rules for categorization:
     - 'Tariff': Use for customs duties specifically related to importing goods.
     - 'Tax': Use for other government levies like VAT, GST, or sales tax.
     - 'Logistics': Use for all other costs related to transport, freight, handling, insurance, etc.
 
-    Provide the output as a single, valid JSON object containing a single key "costs" which is a list of objects.
-    The JSON must have a key "supplier_name" with a string value.
-    Each object in the "costs" list must contain these keys:
-    - "description": A string describing the cost (e.g., "Transport", "Customs Duty").
-    - "amount": A number representing the cost amount.
-    - "hs_code": A string for the HS/Tariff code if available, otherwise an empty string "".
-    - "category": A string classifying the cost into one of three types: 'Tariff', 'Tax', or 'Logistics'.
-
+    Provide the output as a single, valid JSON object with these keys:
+    - "supplier_name": String.
+    - "invoice_number": String.
+    - "invoice_date": String (Format: YYYY-MM-DD).
+    - "costs": List of objects (
+        "description": A string describing the cost (e.g., "Transport", "Customs Duty").,
+        "amount": A number representing the cost amount.,
+        "hs_code": A string for the HS/Tariff code if available, otherwise an empty string "".,
+        "category": A string classifying the cost into one of three types: 'Tariff', 'Tax', or 'Logistics'.,
+    ).
+    
     Example:
     {
-    "supplier_name": "FedEx Express",
-    "costs": [
-        { "description": "International Priority Freight", "amount": 150.75, "hs_code": "85171200", "category": "Logistics" },
-        { "description": "Customs Duty", "amount": 75.00, "hs_code": "87032100", "category": "Tariff" },
-        { "description": "Customs Handling Fee", "amount": 45.50, "hs_code": "" }
-    ]
+        "supplier_name": "FedEx Express",
+        "invoice_number": "9988776655",
+        "invoice_date": "2025-05-13",
+        "costs": [
+            { "description": "International Priority Freight", "amount": 150.75, "hs_code": "85171200", "category": "Logistics" },
+            { "description": "Customs Duty", "amount": 75.00, "hs_code": "87032100", "category": "Tariff" },
+            { "description": "Customs Handling Fee", "amount": 45.50, "hs_code": "" }
+        ]
     }
     """
 
@@ -218,7 +228,7 @@ def get_raw_text_from_mistral(document_url):
 
 
 @frappe.whitelist()
-def save_costs_and_create_pi(po_name, costs_data, logistic_supplier):
+def save_costs_and_create_pi(po_name, costs_data, logistic_supplier, bill_no=None, bill_date=None):
     """
     Saves the verified costs to the Purchase Order's child table and
     creates a draft Purchase Invoice.
@@ -229,7 +239,7 @@ def save_costs_and_create_pi(po_name, costs_data, logistic_supplier):
             
         po_doc = frappe.get_doc("Purchase Order", po_name)
         po_doc.set("custom_additional_shipping_cost", [])
-        total_shipping_cost = 0
+        total_shipping_cost = po_doc.custom_total_shipping_cost_amount
 
         for cost_item in costs_data:
             cost_item = frappe._dict(cost_item)
@@ -240,7 +250,8 @@ def save_costs_and_create_pi(po_name, costs_data, logistic_supplier):
                     "description": cost_item.description[:140],
                     "amount": cost_item.amount,
                     "hs_code_tariff_number": cost_item.hs_code,
-                    "category": cost_item.category
+                    "category": cost_item.category,
+                    "invoice_no": bill_no
                 })
                 total_shipping_cost += float(cost_item.amount)
 
@@ -271,13 +282,13 @@ def save_costs_and_create_pi(po_name, costs_data, logistic_supplier):
         frappe.db.commit()
 
         frappe.logger("api").info(f"Creating Purchase Invoice for PO {po_name} with total shipping cost {total_shipping_cost} from supplier {logistic_supplier}")
-        pi_name = create_logistics_purchase_invoice(po_doc, total_shipping_cost, logistic_supplier, costs_data)
+        pi_name = create_logistics_purchase_invoice(po_doc, total_shipping_cost, logistic_supplier, costs_data, bill_no, bill_date)
         return { "status": "success", "pi_name": pi_name }
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Save Costs and Create PI Failed")
         frappe.throw(str(e))
 
-def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier, costs_data):
+def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier, costs_data, bill_no=None, bill_date=None):
     if total_amount <= 0:
         return None
     
@@ -297,7 +308,7 @@ def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier
                 "description": cost.get("description"),
                 "qty": 1,
                 "rate": cost.get("amount"),
-                "cost_center": cost_center
+                "cost_center": cost_center,
             }
             account = None
             if category == "Tariff":
@@ -326,6 +337,10 @@ def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier
         "posting_date": frappe.utils.today(),
         "due_date": frappe.utils.add_days(frappe.utils.today(), 30),
         "custom_source_purchase_order": source_po.name,
+        "custom_po_no": source_po.name,
+        "bill_no": bill_no,
+        "bill_date": bill_date,
+        "custom_transport_invoice": 1,
         "items": invoice_items,
         "taxes": invoice_taxes,
     })

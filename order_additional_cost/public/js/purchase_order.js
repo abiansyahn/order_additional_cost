@@ -18,7 +18,76 @@ frappe.ui.form.on('Purchase Order', {
                     }
                 });
             });
+
+            frm.trigger('add_source_invoice_connection');
         }
+    },
+    add_source_invoice_connection: function(frm) {
+        frappe.db.count('Purchase Invoice', {
+            filters: {
+                'custom_source_purchase_order': frm.doc.name,
+                'custom_transport_invoice': 1
+            }
+        }).then(count => {
+            const unique_class = "custom-transport-link";
+            
+            let $existing_link = frm.$wrapper.find(`.${unique_class}`);
+
+            if ($existing_link.length > 0) {
+                let $count_span = $existing_link.find('.count');
+                $count_span.text(count);
+
+                if (count > 0) {
+                    $count_span.removeClass('hidden');
+                    $count_span.attr('title', `${count} linked documents`);
+                } else {
+                    $count_span.addClass('hidden');
+                }
+
+                $existing_link.off('click').on('click', function() {
+                    frappe.route_options = {
+                        "custom_source_purchase_order": frm.doc.name,
+                        "custom_transport_invoice": 1
+                    };
+                    frappe.set_route("List", "Purchase Invoice");
+                });
+
+            } else {
+                let label = "Transport Invoice"; 
+                let countPart = count > 0 ? `<span class="count" title="${count} linked documents">${count}</span>` : `<span class="count hidden"></span>`;
+
+                let $link = $(`
+                    <div class="document-link ${unique_class}" data-doctype="Transport Invoice">
+                        <div class="document-link-badge" data-doctype="Transport Invoice">
+                        ${countPart}
+                        <a class="badge-link">${label}</a>
+                        </div>
+                    </div>
+                `);
+
+                $link.on('click', function() {
+                    frappe.route_options = {
+                        "custom_source_purchase_order": frm.doc.name,
+                        "custom_transport_invoice": 1
+                    };
+                    frappe.set_route("List", "Purchase Invoice");
+                });
+
+                setTimeout(() => {
+                    if (frm.$wrapper.find(`.${unique_class}`).length === 0) {
+                        let $links_section = frm.$wrapper.find('.form-dashboard-section.form-links');
+                        
+                        let $target_column = $links_section.find('.section-body .row .col-md-4').first();
+
+                        if ($target_column.length > 0) {
+                            $target_column.append($link);
+                        } else {
+                            frm.$wrapper.find('.form-dashboard-section').first().append($link);
+                        }
+                    }
+                }, 1000);
+            }
+        });
     }
 });
 
@@ -59,6 +128,16 @@ function show_costs_dialog(frm) {
                         }
                     };
                 }
+            },
+            {
+                label: __('Invoice Number'),
+                fieldname: 'invoice_number',
+                fieldtype: 'Data',
+            },
+            {
+                label: __('Invoice Date'),
+                fieldname: 'invoice_date',
+                fieldtype: 'Date',
             },
             {
                 fieldtype: 'Section Break',
@@ -166,7 +245,9 @@ function show_costs_dialog(frm) {
                 args: {
                     po_name: frm.doc.name,
                     costs_data: values.extracted_costs,
-                    logistic_supplier: values.logistic_supplier
+                    logistic_supplier: values.logistic_supplier,
+                    bill_no: values.invoice_number,
+                    bill_date: values.invoice_date
                 },
                 callback: function(r) {
                     if (r.message && r.message.pi_name) {
@@ -212,6 +293,12 @@ function show_costs_dialog(frm) {
                     if (r.message) {
                         if (r.message.matched_supplier) {
                         d.set_value('logistic_supplier', r.message.matched_supplier);
+                        }
+                        if (r.message.invoice_number) {
+                            d.set_value('invoice_number', r.message.invoice_number);
+                        }
+                        if (r.message.invoice_date) {
+                            d.set_value('invoice_date', r.message.invoice_date);
                         }
                         if (r.message && r.message.costs) {
                             initial_ai_costs = r.message.costs;
