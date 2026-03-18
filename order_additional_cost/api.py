@@ -1,32 +1,13 @@
 import frappe
 import json
 import os
+import requests
 from thefuzz import process
-
-# --- Fail-safe Import Logic for Mistral SDK Compatibility ---
-try:
-    # Attempt to import for Modern Mistral SDK (v1.0.0+)
-    from mistralai import Mistral, SystemMessage, UserMessage
-    SDK_VERSION = "modern"
-except ImportError:
-    try:
-        # Fallback for Legacy Mistral SDK
-        from mistralai.client import MistralClient as Mistral
-        # Compatibility wrappers for legacy message structure
-        def SystemMessage(content): return {"role": "system", "content": content}
-        def UserMessage(content): return {"role": "user", "content": content}
-        SDK_VERSION = "legacy"
-    except ImportError:
-        SDK_VERSION = "missing"
 
 @frappe.whitelist()
 def check_settings():
     """Checks if all required settings are configured."""
     missing_settings = []
-    
-    if SDK_VERSION == "missing":
-        missing_settings.append("The 'mistralai' Python library is not installed in the environment.")
-    
     if not frappe.conf.get("mistral_api_key"):
         missing_settings.append("Mistral API Key has not been set in site_config.json.")
         
@@ -54,24 +35,16 @@ def process_invoice_pdf(file_url):
     for internal OCR and structured data extraction, and returns the result.
     """
     try:
-        # Get the full, absolute URL of the file
+        import base64
+        import mimetypes
+
+        # Get the file document directly
         file_doc = frappe.get_doc("File", {"file_url": file_url})
-        if file_doc.is_private:
-            file_doc.is_private = 0
-            file_doc.save(ignore_permissions=True)
-            frappe.db.commit()
-
-        public_url = frappe.utils.get_url(file_doc.file_url)
-
-        if public_url.startswith("http://"):
-            import base64
-            import mimetypes
-            file_content = file_doc.get_content()
-            mime_type = mimetypes.guess_type(file_doc.file_name or file_url)[0] or "application/pdf"
-            base64_data = base64.b64encode(file_content).decode('utf-8')
-            document_to_send = f"data:{mime_type};base64,{base64_data}"
-        else:
-            document_to_send = public_url
+        file_content = file_doc.get_content()
+        
+        mime_type = mimetypes.guess_type(file_doc.file_name or file_url)[0] or "application/pdf"
+        base64_data = base64.b64encode(file_content).decode('utf-8')
+        document_to_send = f"data:{mime_type};base64,{base64_data}"
 
         # Call the updated function that uses Mistral's native document processing
         extracted_data = get_raw_text_from_mistral(document_to_send)
@@ -161,12 +134,8 @@ def get_raw_text_from_mistral(document_url):
     api_key = frappe.conf.get("mistral_api_key")
     if not api_key:
         frappe.throw("Mistral API key is not set in site_config.json")
-
-    if SDK_VERSION == "missing":
-        frappe.throw("The 'mistralai' Python library is not installed in the environment.")
         
     model_name = "mistral-large-latest"
-    client = Mistral(api_key=api_key)
 
     default_system_prompt = """
     You are an expert data extraction assistant. You will be given a URL to a document.
@@ -214,28 +183,36 @@ def get_raw_text_from_mistral(document_url):
     user_prompt_text = "Please extract the supplier name and all cost line items from the provided logistics invoice document."
 
     try:
-        messages = [
-            SystemMessage(content=system_prompt),
-            UserMessage(content=[
-                {"type": "text", "text": user_prompt_text},
-                {"type": "document_url", "document_url": document_url}
-            ])
-        ]
-
-        if SDK_VERSION == "legacy":
-            chat_response = client.chat(
-                model=model_name,
-                messages=messages,
-                response_format={"type": "json_object"}
-            )
-        else:
-            chat_response = client.chat.complete(
-                model=model_name,
-                messages=messages,
-                response_format={"type": "json_object"}
-            )
+        url = "https://api.mistral.ai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
         
-        extracted_json_string = chat_response.choices[0].message.content
+        payload = {
+            "model": model_name,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_prompt_text},
+                        {"type": "document_url", "document_url": document_url}
+                    ]
+                }
+            ]
+        }
+
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
+        response.raise_for_status()
+        
+        data = response.json()
+        extracted_json_string = data["choices"][0]["message"]["content"]
         return json.loads(extracted_json_string)
 
     except Exception as e:
