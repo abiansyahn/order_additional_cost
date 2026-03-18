@@ -1,23 +1,35 @@
 import frappe
 import json
 import os
-from mistralai import Mistral, SystemMessage, UserMessage
 from thefuzz import process
-frappe.utils.logger.set_log_level("DEBUG")
+
+# --- Fail-safe Import Logic for Mistral SDK Compatibility ---
+try:
+    # Attempt to import for Modern Mistral SDK (v1.0.0+)
+    from mistralai import Mistral, SystemMessage, UserMessage
+    SDK_VERSION = "modern"
+except ImportError:
+    try:
+        # Fallback for Legacy Mistral SDK
+        from mistralai.client import MistralClient as Mistral
+        # Compatibility wrappers for legacy message structure
+        def SystemMessage(content): return {"role": "system", "content": content}
+        def UserMessage(content): return {"role": "user", "content": content}
+        SDK_VERSION = "legacy"
+    except ImportError:
+        SDK_VERSION = "missing"
 
 @frappe.whitelist()
 def check_settings():
-    """
-    Checks if all required settings for the AI feature are configured.
-    Returns a list of missing settings.
-    """
+    """Checks if all required settings are configured."""
     missing_settings = []
     
-    # Check for the API key in site_config.json
+    if SDK_VERSION == "missing":
+        missing_settings.append("The 'mistralai' Python library is not installed in the environment.")
+    
     if not frappe.conf.get("mistral_api_key"):
-        missing_settings.append("Mistral API Key has not been set by the administrator.")
+        missing_settings.append("Mistral API Key has not been set in site_config.json.")
         
-    # Check for the fallback item in the Settings Doctype
     if not frappe.db.get_single_value("MistralAI Settings", "default_item"):
         missing_settings.append("A 'Default Fallback Item' has not been selected in MistralAI Settings.")
 
@@ -45,30 +57,24 @@ def process_invoice_pdf(file_url):
         # Get the full, absolute URL of the file
         file_doc = frappe.get_doc("File", {"file_url": file_url})
         if file_doc.is_private:
-            private_file_path = file_doc.get_full_path()
-            public_folder_path = os.path.join(frappe.get_site_path(), "public", "files")
-            new_public_file_path = os.path.join(public_folder_path, file_doc.file_name)
-
-            if os.path.exists(new_public_file_path):
-                os.remove(private_file_path)
-            else:
-                os.makedirs(public_folder_path, exist_ok=True)
-                os.rename(private_file_path, new_public_file_path)
-
-            new_public_url = f"/files/{file_doc.file_name}"
-            frappe.db.sql("""
-                UPDATE `tabFile`
-                SET is_private = 0, file_url = %s
-                WHERE name = %s
-            """, (new_public_url, file_doc.name))
+            file_doc.is_private = 0
+            file_doc.save(ignore_permissions=True)
             frappe.db.commit()
-
-            file_doc.file_url = new_public_url
 
         public_url = frappe.utils.get_url(file_doc.file_url)
 
+        if public_url.startswith("http://"):
+            import base64
+            import mimetypes
+            file_content = file_doc.get_content()
+            mime_type = mimetypes.guess_type(file_doc.file_name or file_url)[0] or "application/pdf"
+            base64_data = base64.b64encode(file_content).decode('utf-8')
+            document_to_send = f"data:{mime_type};base64,{base64_data}"
+        else:
+            document_to_send = public_url
+
         # Call the updated function that uses Mistral's native document processing
-        extracted_data = get_raw_text_from_mistral(public_url)
+        extracted_data = get_raw_text_from_mistral(document_to_send)
 
         matched_supplier = find_best_match(extracted_data.get("supplier_name"), "Supplier", "supplier_name")
         invoice_number = extracted_data.get("invoice_number", "")
@@ -101,8 +107,8 @@ def process_invoice_pdf(file_url):
                         description = frappe.get_value("Item", item_code, "description") or description
                         break
 
-                if not matched_item_code or matched_item_code == fallback_item and search_choices:
-                    best_match_tuple = process.extractOne(cost.get("description"), search_choices.keys(), score_cutoff=80)
+                if (not matched_item_code or matched_item_code == fallback_item) and search_choices:
+                    best_match_tuple = process.extractOne(cost.get("description"), list(search_choices.keys()), score_cutoff=80)
                     if best_match_tuple:
                         matched_search_text = best_match_tuple[0]
                         matched_item_code = search_choices[matched_search_text]
@@ -156,6 +162,9 @@ def get_raw_text_from_mistral(document_url):
     if not api_key:
         frappe.throw("Mistral API key is not set in site_config.json")
 
+    if SDK_VERSION == "missing":
+        frappe.throw("The 'mistralai' Python library is not installed in the environment.")
+        
     model_name = "mistral-large-latest"
     client = Mistral(api_key=api_key)
 
@@ -213,11 +222,18 @@ def get_raw_text_from_mistral(document_url):
             ])
         ]
 
-        chat_response = client.chat.complete(
-            model=model_name,
-            messages=messages,
-            response_format={"type": "json_object"}
-        )
+        if SDK_VERSION == "legacy":
+            chat_response = client.chat(
+                model=model_name,
+                messages=messages,
+                response_format={"type": "json_object"}
+            )
+        else:
+            chat_response = client.chat.complete(
+                model=model_name,
+                messages=messages,
+                response_format={"type": "json_object"}
+            )
         
         extracted_json_string = chat_response.choices[0].message.content
         return json.loads(extracted_json_string)
@@ -238,8 +254,7 @@ def save_costs_and_create_pi(po_name, costs_data, logistic_supplier, bill_no=Non
             costs_data = json.loads(costs_data)
             
         po_doc = frappe.get_doc("Purchase Order", po_name)
-        po_doc.set("custom_additional_shipping_cost", [])
-        total_shipping_cost = po_doc.custom_total_shipping_cost_amount
+        total_shipping_cost = float(po_doc.custom_total_shipping_cost_amount or 0.0)
 
         for cost_item in costs_data:
             cost_item = frappe._dict(cost_item)
@@ -330,6 +345,9 @@ def create_logistics_purchase_invoice(source_po, total_amount, logistic_supplier
                 "description": cost.get("description"),
                 "cost_center": cost_center
             })
+
+    if not invoice_items:
+        frappe.throw("Cannot create Purchase Invoice: No valid items found for logistics or tariff categories.")
 
     pi = frappe.get_doc({
         "doctype": "Purchase Invoice",
