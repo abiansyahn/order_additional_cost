@@ -9,7 +9,7 @@ def check_settings():
     """Checks if all required settings are configured."""
     missing_settings = []
     if not frappe.conf.get("mistral_api_key"):
-        missing_settings.append("Mistral API Key has not been set in site_config.json.")
+        missing_settings.append("Mistral API Key (mistral_api_key) has not been set in site_config.json.")
         
     if not frappe.db.get_single_value("MistralAI Settings", "default_item"):
         missing_settings.append("A 'Default Fallback Item' has not been selected in MistralAI Settings.")
@@ -44,10 +44,9 @@ def process_invoice_pdf(file_url):
         
         mime_type = mimetypes.guess_type(file_doc.file_name or file_url)[0] or "application/pdf"
         base64_data = base64.b64encode(file_content).decode('utf-8')
-        document_to_send = f"data:{mime_type};base64,{base64_data}"
 
-        # Call the updated function that uses Mistral's native document processing
-        extracted_data = get_raw_text_from_mistral(document_to_send)
+        # Call the updated function that uses Mistral's two-step OCR pipeline
+        extracted_data = get_raw_text_from_mistral_pipeline(base64_data, mime_type)
 
         matched_supplier = find_best_match(extracted_data.get("supplier_name"), "Supplier", "supplier_name")
         invoice_number = extracted_data.get("invoice_number", "")
@@ -125,21 +124,74 @@ def find_best_match(query, target_doctype_or_list, target_field=None, use_list=F
         return best_match[0]
     return None
 
-def get_raw_text_from_mistral(document_url):
+def get_raw_text_from_mistral_pipeline(base64_data, mime_type):
     """
-    Sends a document URL to the Mistral API and asks for structured data extraction.
-    asks for the supplier name as a separate field
-    The API handles the OCR internally.
+    Two-step pipeline: 
+    1. Extracts text using Mistral OCR (mistral-ocr-latest)
+    2. Parses the text into structured JSON using Mistral Small (mistral-small-latest)
     """
     api_key = frappe.conf.get("mistral_api_key")
     if not api_key:
-        frappe.throw("Mistral API key is not set in site_config.json")
+        frappe.throw("Mistral API key (mistral_api_key) is not set in site_config.json")
         
-    model_name = "mistral-large-latest"
+    import time
 
+    def make_mistral_request(url, payload):
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        max_retries = 3
+        for attempt in range(max_retries):
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            
+            if response.status_code == 429 and attempt < max_retries - 1:
+                # Wait 2 seconds before trying again if Rate Limited
+                time.sleep(2)
+                continue
+                
+            if response.status_code != 200:
+                error_detail = response.text
+                try:
+                    error_json = response.json()
+                    if "message" in error_json:
+                        error_detail = error_json["message"]
+                except Exception:
+                    pass
+                frappe.throw(f"Mistral API returned an error ({response.status_code}): {error_detail}. Please check your API usage limits or billing dashboard.")
+                
+            return response.json()
+
+    # --- STEP 1: Extract text using Mistral OCR ---
+    document_to_send = f"data:{mime_type};base64,{base64_data}"
+    ocr_payload = {
+        "model": "mistral-ocr-latest",
+        "document": {
+            "type": "document_url",
+            "document_url": document_to_send
+        }
+    }
+    
+    try:
+        ocr_response = make_mistral_request("https://api.mistral.ai/v1/ocr", ocr_payload)
+        
+        # Combine markdown from all pages
+        extracted_text = ""
+        for page in ocr_response.get("pages", []):
+            extracted_text += page.get("markdown", "") + "\n\n"
+            
+        if not extracted_text.strip():
+            frappe.throw("Mistral OCR failed to extract any text from the document.")
+            
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), f"Mistral OCR Request Failed: {e}")
+        frappe.throw(f"An error occurred during Mistral OCR text extraction: {e}")
+
+    # --- STEP 2: Use LLM to structure data ---
     default_system_prompt = """
-    You are an expert data extraction assistant. You will be given a URL to a document.
-    Your task is to read the document and extract the logistics company's name (e.g., FedEx, DHL) and
+    You are an expert data extraction assistant. You will be given OCR text from a logistics invoice document.
+    Your task is to read the document text and extract the logistics company's name (e.g., FedEx, DHL) and
     all cost-related line items, such as transport fees, customs duties, handling fees, etc.
     Analyze the description of each cost.
     Important Rules:
@@ -177,47 +229,33 @@ def get_raw_text_from_mistral(document_url):
     """
 
     custom_prompt = frappe.db.get_single_value("MistralAI Settings", "system_prompt")
-
     system_prompt = custom_prompt or default_system_prompt
     
-    user_prompt_text = "Please extract the supplier name and all cost line items from the provided logistics invoice document."
+    user_prompt_text = f"Please extract the supplier name and all cost line items from the text of this logistics invoice document:\n\n{extracted_text}"
 
+    llm_payload = {
+        "model": "mistral-small-latest",
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_prompt_text
+            }
+        ]
+    }
+    
     try:
-        url = "https://api.mistral.ai/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        
-        payload = {
-            "model": model_name,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": user_prompt_text},
-                        {"type": "document_url", "document_url": document_url}
-                    ]
-                }
-            ]
-        }
-
-        response = requests.post(url, headers=headers, json=payload, timeout=90)
-        response.raise_for_status()
-        
-        data = response.json()
-        extracted_json_string = data["choices"][0]["message"]["content"]
+        llm_response = make_mistral_request("https://api.mistral.ai/v1/chat/completions", llm_payload)
+        extracted_json_string = llm_response["choices"][0]["message"]["content"]
         return json.loads(extracted_json_string)
 
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), f"Mistral API Request Failed: {e}")
-        frappe.throw(f"An error occurred while communicating with the Mistral AI service: {e}")
+        frappe.log_error(frappe.get_traceback(), f"Mistral LLM Request Failed: {e}")
+        frappe.throw(f"An error occurred while communicating with the Mistral AI service to parse data: {e}")
 
 
 @frappe.whitelist()
