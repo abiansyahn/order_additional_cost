@@ -185,7 +185,10 @@ def get_raw_text_from_mistral_pipeline(base64_data, mime_type):
             frappe.throw("Mistral OCR failed to extract any text from the document.")
             
     except Exception as e:
-        frappe.log_error(frappe.get_traceback(), f"Mistral OCR Request Failed: {e}")
+        frappe.log_error(
+            title="Mistral OCR Request Failed",
+            message=f"Error: {e}\n\n{frappe.get_traceback()}"
+        )
         frappe.throw(f"An error occurred during Mistral OCR text extraction: {e}")
 
     # --- STEP 2: Use LLM to structure data ---
